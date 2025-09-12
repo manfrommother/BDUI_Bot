@@ -16,6 +16,9 @@ RUN apt-get update \
 # Create user
 RUN useradd -u 10001 -m botuser
 
+# Prepare data dir with proper ownership (for named volumes initial copy)
+RUN mkdir -p /data && chown -R botuser:botuser /data
+
 # Copy requirements and install
 COPY requirements.txt ./
 RUN python -m venv /opt/venv \
@@ -30,5 +33,7 @@ COPY bot.py ./
 USER botuser
 
 ENV PATH="/opt/venv/bin:$PATH"
+
+VOLUME ["/data"]
 
 CMD ["python", "bot.py"]

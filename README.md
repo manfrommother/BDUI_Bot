@@ -110,3 +110,22 @@ sudo systemctl enable --now telegram-daily-bot.service
 ```bash
 journalctl -u telegram-daily-bot.service -f
 ```
+
+### Если видите Permission denied при записи в STATE_FILE в Docker
+
+Скорее всего, именованный том уже создан с неверными правами. Исправьте так:
+
+```bash
+docker compose down
+# удалить существующий том
+docker volume rm pythonproject1_bot_state || true
+# пересобрать образ (создаст /data с владельцем botuser внутри образа)
+docker compose build --no-cache
+# поднять контейнер (новый том унаследует права)
+docker compose up -d
+```
+
+Проверьте логи:
+```bash
+docker logs -f telegram-daily-bot
+```
