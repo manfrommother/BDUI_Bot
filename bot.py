@@ -404,11 +404,11 @@ def _setup_schedule(app: Application) -> None:
     # 0..6 = Mon..Sun — выбираем будни
     app.job_queue.run_daily(
         callback=daily_job,
-        time=time(hour=10, minute=0, tzinfo=tz),
+        time=time(hour=9, minute=0, tzinfo=tz),
         days=(0, 1, 2, 3, 4),
         name="daily-standup",
     )
-    logger.info("Scheduled daily job at 10:00 %s on weekdays", TZ)
+    logger.info("Scheduled daily job at 09:00 %s on weekdays", TZ)
 
 
 # --------------- Error handler ---------------
