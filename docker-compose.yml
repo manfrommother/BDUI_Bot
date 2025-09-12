@@ -1,0 +1,10 @@
+services:
+  bot:
+    build: .
+    container_name: telegram-daily-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./state.json:/app/state.json
+    command: ["python", "bot.py"]

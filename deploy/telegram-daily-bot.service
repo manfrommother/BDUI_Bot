@@ -1,0 +1,19 @@
+[Unit]
+Description=Telegram Daily Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/telegram-daily-bot
+EnvironmentFile=/opt/telegram-daily-bot/.env
+ExecStart=/opt/telegram-daily-bot/.venv/bin/python /opt/telegram-daily-bot/bot.py
+Restart=always
+RestartSec=5
+KillSignal=SIGINT
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
