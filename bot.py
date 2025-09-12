@@ -26,7 +26,7 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 TZ = os.getenv("TZ", "Europe/Moscow")
 
-STATE_FILE = "state.json"
+STATE_FILE = os.getenv("STATE_FILE", "state.json")
 
 
 # --------------- State helpers ---------------
@@ -56,6 +56,9 @@ def _read_state() -> Dict[str, Any]:
 
 def _write_state(state: Dict[str, Any]) -> None:
     try:
+        dir_name = os.path.dirname(STATE_FILE)
+        if dir_name:
+            os.makedirs(dir_name, exist_ok=True)
         with open(STATE_FILE, "w", encoding="utf-8") as f:
             json.dump(state, f, ensure_ascii=False, indent=2)
     except Exception as exc:

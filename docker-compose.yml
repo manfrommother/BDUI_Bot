@@ -5,6 +5,11 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    environment:
+      - STATE_FILE=/data/state.json
     volumes:
-      - ./state.json:/app/state.json
+      - bot_state:/data
     command: ["python", "bot.py"]
+
+volumes:
+  bot_state:

@@ -18,6 +18,8 @@ pip install -r requirements.txt
 ```env
 BOT_TOKEN=ваш_токен
 TZ=Europe/Moscow
+# Необязательный путь к состоянию (по умолчанию state.json в текущей директории)
+# STATE_FILE=/data/state.json
 ```
 
 3. Запустите:
@@ -52,6 +54,7 @@ python bot.py
 ```env
 BOT_TOKEN=ваш_токен
 TZ=Europe/Moscow
+STATE_FILE=/data/state.json
 ```
 
 2. Соберите и запустите:
@@ -60,7 +63,7 @@ TZ=Europe/Moscow
 docker compose up -d --build
 ```
 
-3. Бот хранит состояние в `state.json` смонтированном из хоста.
+3. Состояние хранится на именованном томе `bot_state` (в контейнере путь `/data`). Это решает проблемы прав.
 
 Остановить:
 
@@ -79,8 +82,22 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 ``` 
 
-3. Создайте `/opt/telegram-daily-bot/.env` с переменными `BOT_TOKEN` и `TZ`.
-4. Скопируйте unit-файл:
+3. Создайте `/opt/telegram-daily-bot/.env`:
+
+```env
+BOT_TOKEN=ваш_токен
+TZ=Europe/Moscow
+STATE_FILE=/opt/telegram-daily-bot/data/state.json
+```
+
+4. Создайте директорию под состояние и дайте права пользователю сервиса:
+
+```bash
+sudo mkdir -p /opt/telegram-daily-bot/data
+sudo chown -R ubuntu:ubuntu /opt/telegram-daily-bot
+```
+
+5. Скопируйте unit-файл и включите сервис:
 
 ```bash
 sudo cp deploy/telegram-daily-bot.service /etc/systemd/system/

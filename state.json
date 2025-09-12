@@ -1,4 +1,9 @@
 {
-  "chat_id": -4088909617,
-  "participants": []
+  "chat_id": 445320878,
+  "participants": [],
+  "known_users": {
+    "445320878": {
+      "445320878": "@manfrommother"
+    }
+  }
 }

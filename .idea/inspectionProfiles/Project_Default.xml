@@ -1,0 +1,60 @@
+<component name="InspectionProjectProfileManager">
+  <profile version="1.0">
+    <option name="myName" value="Project Default" />
+    <inspection_tool class="PyPackageRequirementsInspection" enabled="true" level="WARNING" enabled_by_default="true">
+      <option name="ignoredPackages">
+        <list>
+          <option value="aiodns" />
+          <option value="aiohttp" />
+          <option value="aiosignal" />
+          <option value="alembic" />
+          <option value="annotated-types" />
+          <option value="anyio" />
+          <option value="async-timeout" />
+          <option value="asyncpg" />
+          <option value="attrs" />
+          <option value="brotli" />
+          <option value="brotlicffi" />
+          <option value="certifi" />
+          <option value="cffi" />
+          <option value="click" />
+          <option value="colorama" />
+          <option value="crud-api" />
+          <option value="fastapi" />
+          <option value="frozenlist" />
+          <option value="greenlet" />
+          <option value="h11" />
+          <option value="idna" />
+          <option value="jsonlogger" />
+          <option value="mako" />
+          <option value="markupsafe" />
+          <option value="multidict" />
+          <option value="polyfactory" />
+          <option value="prometheus-client" />
+          <option value="py-utils" />
+          <option value="pycares" />
+          <option value="pycparser" />
+          <option value="pydantic-core" />
+          <option value="pydantic-settings" />
+          <option value="pydantic" />
+          <option value="pyjwt" />
+          <option value="python-dateutil" />
+          <option value="python-dotenv" />
+          <option value="pytz" />
+          <option value="redis" />
+          <option value="sentry-sdk" />
+          <option value="six" />
+          <option value="sniffio" />
+          <option value="sqlalchemy" />
+          <option value="typing-extensions" />
+          <option value="urllib3" />
+          <option value="uvicorn" />
+          <option value="yarl" />
+          <option value="pytest" />
+          <option value="httpx" />
+          <option value="faker" />
+        </list>
+      </option>
+    </inspection_tool>
+  </profile>
+</component>
