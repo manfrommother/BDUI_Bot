@@ -28,6 +28,12 @@ TZ = os.getenv("TZ", "Europe/Moscow")
 
 STATE_FILE = os.getenv("STATE_FILE", "state.json")
 
+# Ссылка на дейлик (можно переопределить переменной окружения DAILY_LINK)
+DAILY_LINK = os.getenv(
+    "DAILY_LINK",
+    "https://x5group.ktalk.ru/23a64c1ee4e4443cbe66c80fd7326727",
+)
+
 
 # --------------- State helpers ---------------
 
@@ -343,7 +349,10 @@ async def _announce_today(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> N
         return
     await context.bot.send_message(
         chat_id=chat_id,
-        text=f"Сегодня дейли проводит: {chosen}",
+        text=(
+            f"Сегодня дейли проводит: {chosen}\n"
+            f"Подключиться: <a href=\"{DAILY_LINK}\">ссылка</a>"
+        ),
         parse_mode=ParseMode.HTML,
         disable_notification=False,
     )
@@ -401,14 +410,15 @@ async def daily_job(context: ContextTypes.DEFAULT_TYPE) -> None:
 
 def _setup_schedule(app: Application) -> None:
     tz = timezone(TZ)
-    # 0..6 = Mon..Sun — выбираем будни
+    # В python-telegram-bot: 0=Monday, 1=Tuesday, ..., 6=Sunday
+    # Выбираем будни: понедельник-пятница (0,1,2,3,4)
     app.job_queue.run_daily(
         callback=daily_job,
-        time=time(hour=9, minute=0, tzinfo=tz),
-        days=(0, 1, 2, 3, 4),
+        time=time(hour=10, minute=0, tzinfo=tz),
+        days=(0, 1, 2, 3, 4),  # Monday to Friday
         name="daily-standup",
     )
-    logger.info("Scheduled daily job at 09:00 %s on weekdays", TZ)
+    logger.info("Scheduled daily job at 10:00 %s on weekdays (Mon-Fri)", TZ)
 
 
 # --------------- Error handler ---------------
