@@ -2,7 +2,7 @@ import os
 import json
 import random
 import logging
-from datetime import time, timedelta
+from datetime import datetime, time, timedelta
 from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
@@ -17,6 +17,7 @@ from telegram.ext import (
     ChatMemberHandler,
     filters,
 )
+from telegram.request import HTTPXRequest
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -27,6 +28,11 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 TZ = os.getenv("TZ", "Europe/Moscow")
 
 STATE_FILE = os.getenv("STATE_FILE", "state.json")
+
+# Настройки таймаутов для HTTP-запросов (секунды)
+CONNECT_TIMEOUT = float(os.getenv("CONNECT_TIMEOUT", "30.0"))
+READ_TIMEOUT = float(os.getenv("READ_TIMEOUT", "30.0"))
+WRITE_TIMEOUT = float(os.getenv("WRITE_TIMEOUT", "30.0"))
 
 # Ссылка на дейлик (можно переопределить переменной окружения DAILY_LINK)
 DAILY_LINK = os.getenv(
@@ -343,10 +349,62 @@ def _choose_random_participant(participants: List[str]) -> Optional[str]:
 async def _announce_today(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> None:
     state = _read_state()
     participants: List[str] = state.get("participants", [])
-    chosen = _choose_random_participant(participants)
-    if not chosen:
+    if not participants:
         await context.bot.send_message(chat_id=chat_id, text="Список участников пуст. Добавьте через /add.")
         return
+
+    tz = timezone(TZ)
+    today = datetime.now(tz).date()
+    window_start = today - timedelta(days=14)
+
+    history: List[Dict[str, Any]] = state.get("history", [])
+    recent_hosts_keys = set()
+    for entry in history:
+        try:
+            if str(entry.get("chat_id")) != str(chat_id):
+                continue
+            d_str = entry.get("date")
+            host = entry.get("host")
+            if not d_str or not host:
+                continue
+            year, month, day = [int(x) for x in d_str.split("-")]
+            d_obj = datetime(year, month, day, tzinfo=tz).date()
+            if d_obj >= window_start:
+                recent_hosts_keys.add(_name_key(str(host)))
+        except Exception:
+            continue
+
+    candidates = [p for p in participants if _name_key(p) not in recent_hosts_keys]
+    if candidates:
+        chosen = _choose_random_participant(candidates)
+    else:
+        last_seen: Dict[str, Optional[datetime]] = {}
+        for p in participants:
+            last_seen[_name_key(p)] = None
+        for entry in history:
+            try:
+                if str(entry.get("chat_id")) != str(chat_id):
+                    continue
+                host = str(entry.get("host"))
+                d_str = entry.get("date")
+                if not host or not d_str:
+                    continue
+                year, month, day = [int(x) for x in d_str.split("-")]
+                d_obj = datetime(year, month, day, tzinfo=tz)
+                key = _name_key(host)
+                prev = last_seen.get(key)
+                if prev is None or (isinstance(prev, datetime) and d_obj > prev):
+                    last_seen[key] = d_obj
+            except Exception:
+                continue
+
+        def sort_key(p: str):
+            seen = last_seen.get(_name_key(p))
+            return (1, seen) if isinstance(seen, datetime) else (0, datetime.min.replace(tzinfo=tz))
+
+        sorted_participants = sorted(participants, key=sort_key)
+        chosen = sorted_participants[0]
+
     await context.bot.send_message(
         chat_id=chat_id,
         text=(
@@ -356,6 +414,19 @@ async def _announce_today(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> N
         parse_mode=ParseMode.HTML,
         disable_notification=False,
     )
+
+    try:
+        state = _read_state()
+        history = state.get("history", [])
+        history.append({
+            "chat_id": chat_id,
+            "date": today.strftime("%Y-%m-%d"),
+            "host": chosen,
+        })
+        state["history"] = history[-500:]
+        _write_state(state)
+    except Exception as exc:
+        logger.warning("Failed to update history: %s", exc)
 
 
 async def today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -433,7 +504,14 @@ def main() -> None:
     if not BOT_TOKEN:
         raise RuntimeError("BOT_TOKEN не задан. Укажите его в .env или переменных окружения.")
 
-    app = Application.builder().token(BOT_TOKEN).build()
+    # Настройка таймаутов для HTTP-запросов
+    request = HTTPXRequest(
+        connect_timeout=CONNECT_TIMEOUT,
+        read_timeout=READ_TIMEOUT,
+        write_timeout=WRITE_TIMEOUT,
+    )
+
+    app = Application.builder().token(BOT_TOKEN).request(request).build()
 
     # Команды
     app.add_handler(CommandHandler("start", start))
