@@ -83,7 +83,8 @@ def _default_state() -> Dict[str, Any]:
         "chat_id": None,
         "participants": [],
         "known_users": {},
-        "current_pool": []  # Текущий пул для ротации
+        "current_pool": [],  # Текущий пул для ротации
+        "skip_dates": []  # Список дат для пропуска в формате "YYYY-MM-DD"
     }
 
 
@@ -102,6 +103,8 @@ def _read_state() -> Dict[str, Any]:
                 data["chat_id"] = None
             if "current_pool" not in data:
                 data["current_pool"] = []
+            if "skip_dates" not in data:
+                data["skip_dates"] = []
             return data
     except Exception as exc:
         logger.warning("Failed to read state file: %s", exc)
@@ -228,11 +231,14 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "/setchat — зафиксировать текущий чат для рассылки\n"
             "/add @username | Имя — добавить участника (поддерживается список)\n"
             "/remove @username | Имя — удалить участника (поддерживается список)\n"
+            "/addall — добавить в пул всех известных участников чата\n"
             "/list — показать пул участников\n"
+            "/skip ДД.ММ.ГГ — пропустить дейли в указанную дату\n"
+            "/unskip ДД.ММ.ГГ — убрать дату из пропусков\n"
+            "/skiplist — показать список пропускаемых дат\n"
             "/today — выбрать ведущего сейчас\n"
             "/chatid — показать ID текущего чата\n"
-            "/testjob [сек] — тест: запустить анонс через N секунд (по умолчанию 5)\n"
-            "/addall — добавить в пул всех известных участников чата"
+            "/testjob [сек] — тест: запустить анонс через N секунд (по умолчанию 5)"
         )
 
 
@@ -434,6 +440,139 @@ async def list_participants(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await msg.reply_text(f"Текущий список:\n{text}")
 
 
+async def skip_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Добавить дату для пропуска дейли. Формат: /skip ДД.ММ.ГГ или /skip ДД.ММ.ГГГГ"""
+    msg = update.effective_message
+    if msg is None:
+        return
+
+    # Проверка прав администратора
+    if not _is_admin(update.effective_user.id if update.effective_user else None):
+        await msg.reply_text("⛔ Эта команда доступна только администратору.")
+        return
+
+    if not context.args:
+        await msg.reply_text(
+            "Укажите дату для пропуска.\n"
+            "Формат: /skip ДД.ММ.ГГ или /skip ДД.ММ.ГГГГ\n"
+            "Примеры: /skip 14.11.25 или /skip 14.11.2025"
+        )
+        return
+
+    date_str = context.args[0].strip()
+
+    # Парсим дату
+    try:
+        # Пробуем формат ДД.ММ.ГГ
+        if len(date_str.split(".")[-1]) == 2:
+            parsed_date = datetime.strptime(date_str, "%d.%m.%y")
+        else:
+            # Формат ДД.ММ.ГГГГ
+            parsed_date = datetime.strptime(date_str, "%d.%m.%Y")
+
+        # Преобразуем в формат YYYY-MM-DD для хранения
+        date_key = parsed_date.strftime("%Y-%m-%d")
+
+    except ValueError:
+        await msg.reply_text(
+            "❌ Неверный формат даты!\n"
+            "Используйте: /skip ДД.ММ.ГГ или /skip ДД.ММ.ГГГГ\n"
+            "Примеры: /skip 14.11.25 или /skip 14.11.2025"
+        )
+        return
+
+    state = _read_state()
+    skip_dates: List[str] = state.get("skip_dates", [])
+
+    if date_key in skip_dates:
+        await msg.reply_text(f"Дата {parsed_date.strftime('%d.%m.%Y')} уже в списке пропусков.")
+        return
+
+    skip_dates.append(date_key)
+    skip_dates.sort()  # Сортируем для удобства
+    state["skip_dates"] = skip_dates
+    _write_state(state)
+
+    await msg.reply_text(f"✅ Дата {parsed_date.strftime('%d.%m.%Y')} добавлена в список пропусков.")
+
+
+async def unskip_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Удалить дату из списка пропусков. Формат: /unskip ДД.ММ.ГГ или /unskip ДД.ММ.ГГГГ"""
+    msg = update.effective_message
+    if msg is None:
+        return
+
+    # Проверка прав администратора
+    if not _is_admin(update.effective_user.id if update.effective_user else None):
+        await msg.reply_text("⛔ Эта команда доступна только администратору.")
+        return
+
+    if not context.args:
+        await msg.reply_text(
+            "Укажите дату для удаления из пропусков.\n"
+            "Формат: /unskip ДД.ММ.ГГ или /unskip ДД.ММ.ГГГГ\n"
+            "Примеры: /unskip 14.11.25 или /unskip 14.11.2025"
+        )
+        return
+
+    date_str = context.args[0].strip()
+
+    # Парсим дату
+    try:
+        if len(date_str.split(".")[-1]) == 2:
+            parsed_date = datetime.strptime(date_str, "%d.%m.%y")
+        else:
+            parsed_date = datetime.strptime(date_str, "%d.%m.%Y")
+
+        date_key = parsed_date.strftime("%Y-%m-%d")
+
+    except ValueError:
+        await msg.reply_text(
+            "❌ Неверный формат даты!\n"
+            "Используйте: /unskip ДД.ММ.ГГ или /unskip ДД.ММ.ГГГГ"
+        )
+        return
+
+    state = _read_state()
+    skip_dates: List[str] = state.get("skip_dates", [])
+
+    if date_key not in skip_dates:
+        await msg.reply_text(f"Дата {parsed_date.strftime('%d.%m.%Y')} не найдена в списке пропусков.")
+        return
+
+    skip_dates.remove(date_key)
+    state["skip_dates"] = skip_dates
+    _write_state(state)
+
+    await msg.reply_text(f"✅ Дата {parsed_date.strftime('%d.%m.%Y')} удалена из списка пропусков.")
+
+
+async def list_skip_dates(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Показать список дат для пропуска"""
+    msg = update.effective_message
+    if msg is None:
+        return
+
+    state = _read_state()
+    skip_dates: List[str] = state.get("skip_dates", [])
+
+    if not skip_dates:
+        await msg.reply_text("Список пропускаемых дат пуст.")
+        return
+
+    # Форматируем даты для отображения
+    formatted_dates = []
+    for date_str in skip_dates:
+        try:
+            date_obj = datetime.strptime(date_str, "%Y-%m-%d")
+            formatted_dates.append(date_obj.strftime("%d.%m.%Y"))
+        except ValueError:
+            formatted_dates.append(date_str)
+
+    text = "\n".join(f"• {d}" for d in formatted_dates)
+    await msg.reply_text(f"Пропускаемые даты:\n{text}")
+
+
 def _choose_random_participant(participants: List[str]) -> Optional[str]:
     if not participants:
         return None
@@ -558,8 +697,16 @@ async def daily_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     # Проверяем через производственный календарь РФ
     tz = timezone(TZ)
     today = datetime.now(tz)
-    is_working = await _is_working_day(today)
+    today_str = today.date().strftime("%Y-%m-%d")
 
+    # Проверяем, есть ли дата в списке пропусков
+    skip_dates: List[str] = state.get("skip_dates", [])
+    if today_str in skip_dates:
+        logger.info(f"Skip daily job: {today.date()} is in skip list")
+        return
+
+    # Проверяем рабочий день
+    is_working = await _is_working_day(today)
     if not is_working:
         logger.info(f"Skip daily job: {today.date()} is not a working day (production calendar)")
         return
@@ -608,6 +755,9 @@ def main() -> None:
     app.add_handler(CommandHandler("addall", add_all))
     app.add_handler(CommandHandler("remove", remove_participant))
     app.add_handler(CommandHandler("list", list_participants))
+    app.add_handler(CommandHandler("skip", skip_date))
+    app.add_handler(CommandHandler("unskip", unskip_date))
+    app.add_handler(CommandHandler("skiplist", list_skip_dates))
     app.add_handler(CommandHandler("today", today))
     app.add_handler(CommandHandler("testjob", testjob))
 
