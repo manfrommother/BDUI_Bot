@@ -5,6 +5,7 @@ import logging
 from datetime import datetime, time, timedelta
 from typing import Any, Dict, List, Optional
 
+import httpx
 from dotenv import load_dotenv
 from pytz import timezone
 from telegram import Update, User, ChatMemberUpdated
@@ -26,6 +27,7 @@ load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 TZ = os.getenv("TZ", "Europe/Moscow")
+ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "445320878"))
 
 STATE_FILE = os.getenv("STATE_FILE", "state.json")
 
@@ -41,10 +43,48 @@ DAILY_LINK = os.getenv(
 )
 
 
+# --------------- Production calendar helper ---------------
+
+async def _is_working_day(date: datetime) -> bool:
+    """
+    Проверяет, является ли день рабочим, используя API isdayoff.ru.
+    Возвращает True если рабочий день, False если выходной/праздник.
+    В случае ошибки API возвращает True (по умолчанию считаем рабочим днем).
+    """
+    try:
+        date_str = date.strftime("%Y%m%d")
+        # API isdayoff.ru: 0 = рабочий день, 1 = выходной, 2 = сокращенный день
+        url = f"https://isdayoff.ru/{date_str}"
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(url)
+            if response.status_code == 200:
+                result = response.text.strip()
+                # 0 - рабочий день или сокращенный день
+                return result in ("0", "2")
+            else:
+                logger.warning(f"Production calendar API returned status {response.status_code}, assuming working day")
+                return True
+    except Exception as exc:
+        logger.warning(f"Failed to check production calendar: {exc}, assuming working day")
+        return True
+
+
+# --------------- Admin check helper ---------------
+
+def _is_admin(user_id: Optional[int]) -> bool:
+    """Проверяет, является ли пользователь администратором."""
+    return user_id == ADMIN_USER_ID
+
+
 # --------------- State helpers ---------------
 
 def _default_state() -> Dict[str, Any]:
-    return {"chat_id": None, "participants": [], "known_users": {}}
+    return {
+        "chat_id": None,
+        "participants": [],
+        "known_users": {},
+        "current_pool": []  # Текущий пул для ротации
+    }
 
 
 def _read_state() -> Dict[str, Any]:
@@ -60,6 +100,8 @@ def _read_state() -> Dict[str, Any]:
                 data["participants"] = []
             if "chat_id" not in data:
                 data["chat_id"] = None
+            if "current_pool" not in data:
+                data["current_pool"] = []
             return data
     except Exception as exc:
         logger.warning("Failed to read state file: %s", exc)
@@ -67,12 +109,22 @@ def _read_state() -> Dict[str, Any]:
 
 
 def _write_state(state: Dict[str, Any]) -> None:
+    """
+    Атомарная запись состояния в файл.
+    Сначала пишем во временный файл, затем переименовываем (атомарная операция).
+    """
     try:
         dir_name = os.path.dirname(STATE_FILE)
         if dir_name:
             os.makedirs(dir_name, exist_ok=True)
-        with open(STATE_FILE, "w", encoding="utf-8") as f:
+
+        # Записываем во временный файл
+        temp_file = STATE_FILE + ".tmp"
+        with open(temp_file, "w", encoding="utf-8") as f:
             json.dump(state, f, ensure_ascii=False, indent=2)
+
+        # Атомарно переименовываем (заменяем старый файл)
+        os.replace(temp_file, STATE_FILE)
     except Exception as exc:
         logger.error("Failed to write state file: %s", exc)
 
@@ -195,6 +247,12 @@ async def setchat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.effective_message
     if update.effective_chat is None or msg is None:
         return
+
+    # Проверка прав администратора
+    if not _is_admin(update.effective_user.id if update.effective_user else None):
+        await msg.reply_text("⛔ Эта команда доступна только администратору.")
+        return
+
     state = _read_state()
     state["chat_id"] = update.effective_chat.id
     _write_state(state)
@@ -207,6 +265,12 @@ async def add_participant(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     msg = update.effective_message
     if msg is None:
         return
+
+    # Проверка прав администратора
+    if not _is_admin(update.effective_user.id if update.effective_user else None):
+        await msg.reply_text("⛔ Эта команда доступна только администратору.")
+        return
+
     state = _read_state()
     args_text = (" ".join(context.args)).strip() if context.args else ""
     if not args_text:
@@ -238,6 +302,12 @@ async def add_participant(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         added.append(name)
 
     state["participants"] = participants
+
+    # Если были добавлены новые участники, сбрасываем пул для пересоздания
+    if added:
+        state["current_pool"] = []
+        logger.info(f"Пул сброшен после добавления участников: {added}")
+
     _write_state(state)
 
     parts = []
@@ -255,6 +325,12 @@ async def add_all(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat = update.effective_chat
     if msg is None or chat is None:
         return
+
+    # Проверка прав администратора
+    if not _is_admin(update.effective_user.id if update.effective_user else None):
+        await msg.reply_text("⛔ Эта команда доступна только администратору.")
+        return
+
     state = _read_state()
     known = state.get("known_users", {}).get(str(chat.id), {})
     if not known:
@@ -276,6 +352,12 @@ async def add_all(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         added.append(display)
 
     state["participants"] = participants
+
+    # Если были добавлены новые участники, сбрасываем пул для пересоздания
+    if added:
+        state["current_pool"] = []
+        logger.info(f"Пул сброшен после /addall: {len(added)} участников")
+
     _write_state(state)
 
     if added:
@@ -288,6 +370,12 @@ async def remove_participant(update: Update, context: ContextTypes.DEFAULT_TYPE)
     msg = update.effective_message
     if msg is None:
         return
+
+    # Проверка прав администратора
+    if not _is_admin(update.effective_user.id if update.effective_user else None):
+        await msg.reply_text("⛔ Эта команда доступна только администратору.")
+        return
+
     state = _read_state()
     if not context.args:
         await msg.reply_text("Укажите @username или имя(имена) для удаления.")
@@ -315,6 +403,12 @@ async def remove_participant(update: Update, context: ContextTypes.DEFAULT_TYPE)
             not_found.append(name)
 
     state["participants"] = participants
+
+    # Если были удалены участники, сбрасываем пул для пересоздания
+    if removed:
+        state["current_pool"] = []
+        logger.info(f"Пул сброшен после удаления участников: {removed}")
+
     _write_state(state)
 
     parts = []
@@ -354,56 +448,40 @@ async def _announce_today(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> N
         return
 
     tz = timezone(TZ)
-    today = datetime.now(tz).date()
-    window_start = today - timedelta(days=14)
+    today_dt = datetime.now(tz)
 
-    history: List[Dict[str, Any]] = state.get("history", [])
-    recent_hosts_keys = set()
-    for entry in history:
-        try:
-            if str(entry.get("chat_id")) != str(chat_id):
-                continue
-            d_str = entry.get("date")
-            host = entry.get("host")
-            if not d_str or not host:
-                continue
-            year, month, day = [int(x) for x in d_str.split("-")]
-            d_obj = datetime(year, month, day, tzinfo=tz).date()
-            if d_obj >= window_start:
-                recent_hosts_keys.add(_name_key(str(host)))
-        except Exception:
-            continue
-
-    candidates = [p for p in participants if _name_key(p) not in recent_hosts_keys]
-    if candidates:
-        chosen = _choose_random_participant(candidates)
+    # Особый случай: если участник один, просто выбираем его без ротации
+    if len(participants) == 1:
+        chosen = participants[0]
+        logger.info(f"Единственный участник: {chosen}")
     else:
-        last_seen: Dict[str, Optional[datetime]] = {}
-        for p in participants:
-            last_seen[_name_key(p)] = None
-        for entry in history:
-            try:
-                if str(entry.get("chat_id")) != str(chat_id):
-                    continue
-                host = str(entry.get("host"))
-                d_str = entry.get("date")
-                if not host or not d_str:
-                    continue
-                year, month, day = [int(x) for x in d_str.split("-")]
-                d_obj = datetime(year, month, day, tzinfo=tz)
-                key = _name_key(host)
-                prev = last_seen.get(key)
-                if prev is None or (isinstance(prev, datetime) and d_obj > prev):
-                    last_seen[key] = d_obj
-            except Exception:
-                continue
+        # Получаем текущий пул для ротации
+        current_pool: List[str] = state.get("current_pool", [])
 
-        def sort_key(p: str):
-            seen = last_seen.get(_name_key(p))
-            return (1, seen) if isinstance(seen, datetime) else (0, datetime.min.replace(tzinfo=tz))
+        # Если пул пуст или в нем нет людей из актуального списка участников, обновляем его
+        pool_keys = {_name_key(p) for p in current_pool}
+        participants_keys = {_name_key(p) for p in participants}
 
-        sorted_participants = sorted(participants, key=sort_key)
-        chosen = sorted_participants[0]
+        # Если пул пуст или содержит людей, которых нет в списке участников, пересоздаем пул
+        if not current_pool or not pool_keys.issubset(participants_keys):
+            current_pool = participants.copy()
+            random.shuffle(current_pool)
+            logger.info(f"Пул обновлен: {len(current_pool)} участников")
+
+        # Выбираем первого из пула
+        chosen = current_pool.pop(0)
+
+        # Если пул опустел после выбора, пополняем его заново (исключая только что выбранного)
+        if not current_pool:
+            current_pool = participants.copy()
+            # Удаляем только что выбранного, чтобы избежать повтора
+            chosen_key = _name_key(chosen)
+            current_pool = [p for p in current_pool if _name_key(p) != chosen_key]
+            random.shuffle(current_pool)
+            logger.info(f"Пул исчерпан, создан новый цикл (исключен {chosen})")
+
+        # Сохраняем обновленный пул в state
+        state["current_pool"] = current_pool
 
     await context.bot.send_message(
         chat_id=chat_id,
@@ -415,12 +493,12 @@ async def _announce_today(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> N
         disable_notification=False,
     )
 
+    # Сохраняем историю и обновленный пул
     try:
-        state = _read_state()
         history = state.get("history", [])
         history.append({
             "chat_id": chat_id,
-            "date": today.strftime("%Y-%m-%d"),
+            "date": today_dt.date().strftime("%Y-%m-%d"),
             "host": chosen,
         })
         state["history"] = history[-500:]
@@ -476,20 +554,28 @@ async def daily_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     if not chat_id:
         logger.info("Skip daily job: chat_id not set")
         return
+
+    # Проверяем через производственный календарь РФ
+    tz = timezone(TZ)
+    today = datetime.now(tz)
+    is_working = await _is_working_day(today)
+
+    if not is_working:
+        logger.info(f"Skip daily job: {today.date()} is not a working day (production calendar)")
+        return
+
     await _announce_today(context, chat_id)
 
 
 def _setup_schedule(app: Application) -> None:
     tz = timezone(TZ)
-    # В python-telegram-bot: 0=Monday, 1=Tuesday, ..., 6=Sunday
-    # Выбираем будни: понедельник-пятница (0,1,2,3,4)
+    # Запускаем каждый день в 10:00, проверка рабочего дня внутри daily_job через производственный календарь РФ
     app.job_queue.run_daily(
         callback=daily_job,
         time=time(hour=10, minute=0, tzinfo=tz),
-        days=(0, 1, 2, 3, 4),  # Monday to Friday
         name="daily-standup",
     )
-    logger.info("Scheduled daily job at 10:00 %s on weekdays (Mon-Fri)", TZ)
+    logger.info("Scheduled daily job at 10:00 %s (using production calendar for working days check)", TZ)
 
 
 # --------------- Error handler ---------------
